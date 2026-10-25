@@ -17,7 +17,10 @@ from config import (
     DELAY_AFTER_CONFIRM, DELAY_BETWEEN_ACTIONS, DELAY_SCAN_RETRY,
     HOTKEY_START, HOTKEY_STOP
 )
-from capture import screenshot, get_window_offset
+from capture import (
+    screenshot, get_window_offset, is_failsafe_triggered,
+    send_click, ensure_game_foreground, detect_uipi_block,
+)
 from recognition import (
     TemplateManager, find_button, find_arrows, scan_all_cells,
     compute_grid_from_arrows
@@ -38,9 +41,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# pyautogui 安全设置
-pyautogui.FAILSAFE = True   # 鼠标移到左上角时停止
-pyautogui.PAUSE = 0.1       # 每次操作后暂停
+# pyautogui 设置：点击实际走 Win32 API，FAILSAFE 不会生效，
+# 紧急停止由下面的 check_stop() 轮询光标位置实现
+pyautogui.FAILSAFE = True
+pyautogui.PAUSE = 0.1
 
 # 全局控制标志
 running = False
@@ -53,19 +57,29 @@ MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 
 
-def safe_click(x: int, y: int, delay: float = DELAY_BETWEEN_ACTIONS):
-    """安全点击：使用 Win32 API 确保游戏能接收到点击。"""
+def check_stop() -> bool:
+    """
+    统一停止判定：用户按 F6，或鼠标移到屏幕左上角（紧急停止）。
+    返回 True 表示应当中止当前动作。
+    """
+    global running
     if stop_event.is_set():
+        return True
+    if is_failsafe_triggered():
+        logger.warning('检测到鼠标位于屏幕左上角 → 紧急停止')
+        stop_event.set()
+        running = False
+        return True
+    return False
+
+
+def safe_click(x: int, y: int, delay: float = DELAY_BETWEEN_ACTIONS):
+    """移动光标并点击游戏窗口（SendInput）。"""
+    if check_stop():
         return
     ox, oy = get_window_offset()
-    abs_x, abs_y = int(x + ox), int(y + oy)
-    
-    # 使用 win32 API 移动鼠标并点击（比 pyautogui 更可靠）
-    ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
-    time.sleep(0.1)
-    ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.05)
-    ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    if not send_click(int(x + ox), int(y + oy)):
+        logger.warning('点击事件发送失败')
     time.sleep(delay)
 
 
@@ -74,7 +88,7 @@ def wait_for(condition_fn, timeout: float = 10.0, interval: float = 0.5,
     """等待条件满足，超时返回 False。"""
     start = time.time()
     while time.time() - start < timeout:
-        if stop_event.is_set():
+        if check_stop():
             return False
         if condition_fn():
             return True
@@ -93,8 +107,11 @@ def run_single_divination(templates: TemplateManager) -> bool:
     执行一次完整的占卜流程。
     返回 True 表示成功，False 表示需要停止。
     """
-    if stop_event.is_set():
+    if check_stop():
         return False
+    
+    # 确保游戏在前台，否则点击会落到别的窗口上
+    ensure_game_foreground()
     
     # ====== 步骤 1: 点击"开始占卜" ======
     logger.info('=' * 50)
@@ -154,7 +171,7 @@ def run_single_divination(templates: TemplateManager) -> bool:
     logger.info('步骤 4: 自适应翻牌...')
     
     for flip_num in range(1, 4):
-        if stop_event.is_set():
+        if check_stop():
             return False
         
         next_pos = choose_next_flip(revealed)
@@ -274,7 +291,9 @@ def run_automation(templates: TemplateManager, max_rounds: int = 999):
     
     round_count = 0
     
-    while not stop_event.is_set() and round_count < max_rounds:
+    while round_count < max_rounds:
+        if check_stop():
+            break
         round_count += 1
         logger.info(f'\n===== 第 {round_count} 轮 =====')
         
@@ -311,8 +330,18 @@ def on_start():
         logger.error(f'模板加载失败: {e}')
         return
     
+    warn = detect_uipi_block()
+    if warn:
+        logger.error(warn)
+        return
+    
     logger.info('模板加载完成，3秒后开始...')
-    time.sleep(3.0)
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        if check_stop():
+            logger.info('已取消启动')
+            return
+        time.sleep(0.1)
     
     thread = threading.Thread(target=run_automation, args=(templates,), daemon=True)
     thread.start()

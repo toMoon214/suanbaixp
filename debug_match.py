@@ -6,7 +6,7 @@ import logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
 
 import cv2
-from capture import screenshot
+from capture import screenshot, save_image
 from recognition import (
     TemplateManager, find_button, find_arrows,
     compute_grid_from_arrows, scan_all_cells
@@ -16,8 +16,9 @@ def main():
     print('正在截图（自动查找游戏窗口）...')
     screen = screenshot()
     
-    cv2.imwrite('debug_screenshot.png', screen)
-    print(f'截图已保存: debug_screenshot.png ({screen.shape[1]}x{screen.shape[0]})')
+    ok = save_image('debug_screenshot.png', screen)
+    print(f'截图已保存: debug_screenshot.png ({screen.shape[1]}x{screen.shape[0]})' if ok
+          else '截图保存失败')
     
     print('\n加载模板...')
     templates = TemplateManager()

@@ -10,7 +10,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['matplotlib', 'scipy', 'PIL', 'tkinter.test', 'unittest', 'email', 'xml', 'pydoc', 'doctest'],
+    excludes=[],
     noarchive=False,
     optimize=0,
 )
@@ -37,5 +37,4 @@ exe = EXE(
     entitlements_file=None,
     version='version_info.py',
     uac_admin=True,
-    icon=['icon.ico'],
 )

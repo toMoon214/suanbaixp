@@ -15,7 +15,10 @@ from config import (
     ARROW_TO_LINE, DELAY_AFTER_START, DELAY_AFTER_FLIP, DELAY_AFTER_CHOOSE,
     DELAY_AFTER_CONFIRM, DELAY_BETWEEN_ACTIONS, DELAY_SCAN_RETRY,
 )
-from capture import screenshot, get_window_offset
+from capture import (
+    screenshot, get_window_offset, is_failsafe_triggered,
+    send_click, ensure_game_foreground, detect_uipi_block,
+)
 from recognition import (
     TemplateManager, find_button, find_arrows, scan_all_cells,
     compute_grid_from_arrows
@@ -62,20 +65,33 @@ MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 
 stop_event = threading.Event()
+_failsafe_reported = False
+
+
+def check_stop() -> bool:
+    """
+    统一停止判定：用户点停止，或鼠标移到屏幕左上角（紧急停止）。
+    返回 True 表示应当中止当前动作。
+    """
+    global _failsafe_reported
+    if stop_event.is_set():
+        return True
+    if is_failsafe_triggered():
+        if not _failsafe_reported:
+            logger.warning('检测到鼠标位于屏幕左上角 → 紧急停止')
+            _failsafe_reported = True
+        stop_event.set()
+        return True
+    return False
 
 
 def safe_click(x: int, y: int, delay: float = DELAY_BETWEEN_ACTIONS):
-    """使用 Win32 API 点击。"""
-    if stop_event.is_set():
+    """移动光标并点击游戏窗口（SendInput）。"""
+    if check_stop():
         return
     ox, oy = get_window_offset()
-    abs_x, abs_y = int(x + ox), int(y + oy)
-    
-    ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
-    time.sleep(0.1)
-    ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.05)
-    ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    if not send_click(int(x + ox), int(y + oy)):
+        logger.warning('点击事件发送失败')
     time.sleep(delay)
 
 
@@ -84,7 +100,7 @@ def wait_for(condition_fn, timeout: float = 10.0, interval: float = 0.5,
     """等待条件满足。"""
     start = time.time()
     while time.time() - start < timeout:
-        if stop_event.is_set():
+        if check_stop():
             return False
         if condition_fn():
             return True
@@ -97,8 +113,11 @@ def wait_for(condition_fn, timeout: float = 10.0, interval: float = 0.5,
 
 def run_single_divination(templates: TemplateManager) -> bool:
     """执行一次完整的占卜流程。"""
-    if stop_event.is_set():
+    if check_stop():
         return False
+    
+    # 确保游戏在前台，否则点击会落到别的窗口上
+    ensure_game_foreground()
     
     # 步骤 1: 点击"开始占卜"
     logger.info('=' * 50)
@@ -157,7 +176,7 @@ def run_single_divination(templates: TemplateManager) -> bool:
     logger.info('步骤 4: 自适应翻牌...')
     
     for flip_num in range(1, 4):
-        if stop_event.is_set():
+        if check_stop():
             return False
         
         next_pos = choose_next_flip(revealed)
@@ -259,16 +278,21 @@ def run_single_divination(templates: TemplateManager) -> bool:
 def run_automation(templates: TemplateManager, max_rounds: int,
                    on_round_done=None, on_finished=None):
     """主循环。on_round_done(remaining) 每轮完成后回调。"""
+    global _failsafe_reported
     stop_event.clear()
+    _failsafe_reported = False
     
     logger.info('=' * 60)
     logger.info(f'自动占卜开始! (最大 {max_rounds} 轮)')
+    logger.info('鼠标移到屏幕左上角可紧急停止')
     logger.info('=' * 60)
     
     round_count = 0
     remaining = max_rounds
     
-    while not stop_event.is_set() and remaining > 0:
+    while remaining > 0:
+        if check_stop():
+            break
         round_count += 1
         logger.info(f'\n===== 第 {round_count} 轮 (剩余{remaining}次) =====')
         
@@ -425,7 +449,7 @@ class DivinationGUI:
         info_frame.pack(fill='x', padx=15, pady=(0, 10))
         
         ttk.Label(info_frame,
-                  text='提示: 输入游戏中显示的剩余占卜次数，然后点击"开始"',
+                  text='提示: 输入剩余次数后点「开始」　|　紧急停止: 鼠标移到屏幕左上角',
                   style='Info.TLabel').pack(side='left')
     
     def _setup_logging(self):
@@ -478,21 +502,39 @@ class DivinationGUI:
                 self.templates = TemplateManager()
                 logger.info('模板加载完成')
                 
-                self._set_status('运行中')
-                logger.info('3秒后开始自动占卜...')
-                time.sleep(3.0)
+                # 权限不对等时点击会被 Windows 静默丢弃，直接拦下，避免白跑
+                warn = detect_uipi_block()
+                if warn:
+                    logger.error(warn)
+                    self.root.after(0, lambda: self._set_status('权限不足'))
+                    self._on_finished()
+                    return
                 
-                if not stop_event.is_set():
-                    run_automation(self.templates, max_rounds,
-                                   on_round_done=self._update_remaining,
-                                   on_finished=self._on_finished)
+                self._set_status('运行中')
+                logger.info('3秒后开始自动占卜（鼠标移到左上角 / 点停止可取消）...')
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    if check_stop():
+                        logger.info('已取消启动')
+                        self._on_finished()
+                        return
+                    time.sleep(0.1)
+                
+                run_automation(self.templates, max_rounds,
+                               on_round_done=self._update_remaining,
+                               on_finished=self._on_finished)
             except Exception as e:
                 logger.error(f'启动失败: {e}', exc_info=True)
                 self.root.after(0, self._on_finished)
         
         stop_event.clear()
+        self._reset_failsafe()
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
+    
+    def _reset_failsafe(self):
+        global _failsafe_reported
+        _failsafe_reported = False
     
     def _on_stop(self):
         if not self.running:

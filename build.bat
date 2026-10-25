@@ -1,32 +1,54 @@
 @echo off
-chcp 65001 >nul
+setlocal
 echo ========================================
-echo   300è‹±é›„ å åœè‡ªåŠ¨åŒ– - æ‰“åŒ…å·¥å…·
+echo   300Ó¢ĞÛ Õ¼²·×Ô¶¯»¯ - ´ò°ü¹¤¾ß
 echo ========================================
 echo.
 
-pip install pyinstaller >nul 2>&1
+REM ---- »·¾³×Ô¼ì ----
+python -c "import sys; print('Python', sys.version.split()[0])"
+python -c "import cv2, numpy, mss, pyautogui, tkinter" 2>nul
+if errorlevel 1 (
+    echo [´íÎó] ÒÀÀµ²»ÍêÕû¡£
+    echo        ÇëÏÈÖ´ĞĞ: python -m pip install -r requirements.txt
+    pause
+    exit /b 1
+)
 
-echo æ­£åœ¨æ‰“åŒ…...
+python -m pip install pyinstaller >nul 2>&1
+
+echo.
+echo ÕıÔÚ´ò°ü£¨Ê×´Î»òÒÀÀµ±ä¸üÊ±Ô¼Ğè 1-3 ·ÖÖÓ£©...
+echo.
+
+REM Í¼±ê¿ÉÑ¡£º´æÔÚ icon.ico ²Å´øÉÏ£¬·ñÔòÓÃÄ¬ÈÏÍ¼±ê
+set ICON_ARG=
+if exist "icon.ico" set ICON_ARG=--icon icon.ico
 
 python -m PyInstaller --onefile --windowed ^
-    --name "é…¸è´¥å¥½è¿æ˜Ÿç›˜" ^
+    --name "Ëá°ÜºÃÔËĞÇÅÌ" ^
     --add-data "temp;temp" ^
-    --uac-admin ^
-    --icon icon.ico ^
+    --uac-admin %ICON_ARG% ^
     --version-file version_info.py ^
     --hidden-import mss ^
     --hidden-import mss.windows ^
     --noconfirm ^
+    --clean ^
     gui.py
 
 echo.
-if exist "dist\é…¸è´¥å¥½è¿æ˜Ÿç›˜.exe" (
+if exist "dist\Ëá°ÜºÃÔËĞÇÅÌ.exe" (
+    for %%A in ("dist\Ëá°ÜºÃÔËĞÇÅÌ.exe") do set SIZE=%%~zA
     echo ========================================
-    echo   æ‰“åŒ…æˆåŠŸ!
-    echo   è¾“å‡º: dist\é…¸è´¥å¥½è¿æ˜Ÿç›˜.exe
+    echo   ´ò°ü³É¹¦!
+    echo   Êä³ö: dist\Ëá°ÜºÃÔËĞÇÅÌ.exe  ^(%SIZE% ×Ö½Ú^)
     echo ========================================
+    if %SIZE% LSS 10000000 (
+        echo [¾¯¸æ] ÎÄ¼şÆ«Ğ¡£¬¿ÉÄÜ´ò°ü²»ÍêÕû£¬Çë¼ì²éÉÏ·½ÈÕÖ¾
+    )
 ) else (
-    echo æ‰“åŒ…å¤±è´¥ï¼Œè¯·æ£€æŸ¥é”™è¯¯ä¿¡æ¯
+    echo ========================================
+    echo   ´ò°üÊ§°Ü£¬Çë¼ì²éÉÏ·½´íÎóĞÅÏ¢
+    echo ========================================
 )
 pause

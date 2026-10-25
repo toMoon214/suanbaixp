@@ -1,3 +1,6 @@
+# 运行环境：Python 3.10+（代码使用了 X | None 联合类型语法）
+# 注意：tkinter 属于标准库组件，安装 Python 时须勾选 "tcl/tk and IDLE"，
+#       否则 GUI 无法启动（ModuleNotFoundError: No module named 'tkinter'）
 pyautogui
 mss
 Pillow
